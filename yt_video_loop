@@ -1,0 +1,180 @@
+// ==UserScript==
+// @name         YouTube Loop Toggle with Text Button
+// @namespace    http://tampermonkey.net/
+// @version      1.3
+// @description  Adds a text-based Loop button to YouTube videos to continuously loop them, even in the background or when on another tab. The button displays "Loop On" when active and "Loop Off" when inactive.
+// @author       Your Name
+// @match        https://www.youtube.com/*
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // Configuration
+    const CHECK_INTERVAL_MS = 500; // Check every 0.5 seconds
+    const LOOP_THRESHOLD_SEC = 1;  // Time before end to trigger loop
+
+    let loopEnabled = false;
+    let loopIntervalId = null;
+
+    /**
+     * Adds the Loop button to YouTube's player controls.
+     */
+    function addLoopButton() {
+        const playerControls = document.querySelector('.ytp-right-controls');
+
+        if (!playerControls) {
+            console.warn('Player controls not found.');
+            return;
+        }
+
+        // Prevent adding multiple buttons
+        if (document.getElementById('yt-loop-toggle')) {
+            return;
+        }
+
+        // Create the button
+        const button = document.createElement('button');
+        button.id = 'yt-loop-toggle';
+        button.className = 'ytp-button';
+        button.title = 'Loop Video OFF';
+        button.style.opacity = '0.7'; // Initial state: OFF
+        button.style.background = 'transparent';
+        button.style.border = 'none';
+        button.style.color = 'white';
+        button.style.fontSize = '14px';
+        button.style.cursor = 'pointer';
+        button.style.padding = '0 8px';
+        button.style.margin = '0 4px';
+        button.style.transition = 'opacity 0.3s, background-color 0.3s';
+        button.innerText = 'Loop Off';
+
+        // Add click event listener to toggle looping
+        button.addEventListener('click', toggleLoop);
+
+        // Append the button to the player controls
+        playerControls.insertBefore(button, playerControls.firstChild);
+    }
+
+    /**
+     * Toggles the looping functionality on or off.
+     */
+    function toggleLoop() {
+        loopEnabled = !loopEnabled;
+        const button = document.getElementById('yt-loop-toggle');
+
+        if (loopEnabled) {
+            button.style.opacity = '1.0';
+            button.style.backgroundColor = '#FF0000'; // Red background when ON
+            button.style.borderRadius = '4px';
+            button.title = 'Loop Video ON';
+            button.innerText = 'Loop On';
+            startLoop();
+        } else {
+            button.style.opacity = '0.7';
+            button.style.backgroundColor = 'transparent';
+            button.style.borderRadius = '0';
+            button.title = 'Loop Video OFF';
+            button.innerText = 'Loop Off';
+            stopLoop();
+        }
+    }
+
+    /**
+     * Starts the loop checking interval.
+     */
+    function startLoop() {
+        loopIntervalId = setInterval(() => {
+            const video = document.querySelector('video');
+
+            if (!video) {
+                console.warn('No video element found.');
+                return;
+            }
+
+            // If the video is within the threshold to end, reset to start
+            if (video.duration - video.currentTime <= LOOP_THRESHOLD_SEC) {
+                video.currentTime = 0;
+                // Ensure the video continues playing
+                if (video.paused) {
+                    video.play().catch((error) => {
+                        console.error('Failed to resume playback:', error);
+                    });
+                }
+            }
+        }, CHECK_INTERVAL_MS);
+
+        // Attempt to keep the video playing in background
+        simulateActiveTab();
+    }
+
+    /**
+     * Stops the loop checking interval.
+     */
+    function stopLoop() {
+        if (loopIntervalId) {
+            clearInterval(loopIntervalId);
+            loopIntervalId = null;
+        }
+
+        // Restore the original tab state
+        restoreTabState();
+    }
+
+    /**
+     * Simulates an active tab to prevent the browser from throttling the script.
+     * Note: This approach may not work in all browsers and can have unintended side effects.
+     */
+    function simulateActiveTab() {
+        try {
+            Object.defineProperty(document, 'hidden', {
+                get: () => false,
+                configurable: true
+            });
+            Object.defineProperty(document, 'visibilityState', {
+                get: () => 'visible',
+                configurable: true
+            });
+        } catch (e) {
+            console.warn('Unable to override visibility properties:', e);
+        }
+    }
+
+    /**
+     * Restores the original tab state by removing the overridden properties.
+     */
+    function restoreTabState() {
+        try {
+            delete document.hidden;
+            delete document.visibilityState;
+        } catch (e) {
+            console.warn('Unable to restore visibility properties:', e);
+        }
+    }
+
+    /**
+     * Initializes the script by adding the Loop button and setting up observers.
+     */
+    function init() {
+        addLoopButton();
+    }
+
+    /**
+     * Observes changes in the DOM to re-add the Loop button if necessary (e.g., when navigating to a new video without a full page reload).
+     */
+    const observer = new MutationObserver((mutations) => {
+        for (let mutation of mutations) {
+            if (mutation.type === 'childList') {
+                addLoopButton();
+                break;
+            }
+        }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // Initialize the script
+    init();
+})();
