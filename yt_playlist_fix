@@ -1,0 +1,17 @@
+// ==UserScript==
+// @name         YouTube Studio to Playlists Redirect
+// @namespace    https://tampermonkey.net/
+// @version      1.0
+// @description  Automatically redirects from YouTube Studio videos page to playlists page.
+// @match        https://studio.youtube.com/channel/*/videos
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+    // Target URL to redirect to
+    const targetUrl = "https://www.youtube.com/feed/playlists";
+
+    // Redirect to the target URL
+    window.location.replace(targetUrl);
+})();
