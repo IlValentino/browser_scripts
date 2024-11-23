@@ -1,0 +1,20 @@
+// ==UserScript==
+// @name         Remove Translation Parameter from URLs
+// @namespace    https://tampermonkey.net/
+// @version      1.0
+// @description  Removes ?tl= parameters from URLs
+// @match        *://*.reddit.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+    // Check if 'tl=' is in the URL search parameters
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('tl')) {
+        // Remove the 'tl' parameter
+        url.searchParams.delete('tl');
+        // Redirect to the URL without the 'tl' parameter
+        window.location.replace(url.toString());
+    }
+})();
