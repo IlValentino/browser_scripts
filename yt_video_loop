@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         YouTube Loop Toggle with Text Button
+// @name         YouTube Advanced Loop Toggle
 // @namespace    http://tampermonkey.net/
-// @version      1.3
-// @description  Adds a text-based Loop button to YouTube videos to continuously loop them, even in the background or when on another tab. The button displays "Loop On" when active and "Loop Off" when inactive.
+// @version      2.2
+// @description  Adds a single Loop button to YouTube videos. Click to toggle full video loop, Shift+Click to set a loop segment with start and end times. Enhances loop precision by dynamically adjusting the check interval near the video end. Pressing the button once when a segment loop is active disables all looping.
 // @author       Your Name
 // @match        https://www.youtube.com/*
 // @grant        none
@@ -13,11 +13,60 @@
     'use strict';
 
     // Configuration
-    const CHECK_INTERVAL_MS = 500; // Check every 0.5 seconds
-    const LOOP_THRESHOLD_SEC = 1;  // Time before end to trigger loop
+    const NORMAL_CHECK_INTERVAL_MS = 500; // Normal check every 0.5 seconds
+    const FAST_CHECK_INTERVAL_MS = 100;   // Increased check every 0.1 seconds when near end
+    const FULL_LOOP_THRESHOLD_SEC = 3;     // Time before end to switch to fast checks
 
-    let loopEnabled = false;
+    // Loop States
+    const LOOP_STATE = {
+        OFF: 'off',
+        FULL: 'full',
+        SEGMENT: 'segment'
+    };
+
+    let currentLoopState = LOOP_STATE.OFF;
     let loopIntervalId = null;
+    let segmentLoopIntervalId = null;
+    let loopStartTime = 0;
+    let loopEndTime = 0;
+    let currentCheckInterval = NORMAL_CHECK_INTERVAL_MS;
+
+    /**
+     * Converts a time string (HH:MM:SS or MM:SS) to seconds.
+     * @param {string} timeStr - The time string to convert.
+     * @returns {number|null} - The time in seconds, or null if invalid.
+     */
+    function timeStrToSeconds(timeStr) {
+        const parts = timeStr.split(':').map(part => parseFloat(part));
+        if (parts.some(isNaN)) return null;
+        let seconds = 0;
+        if (parts.length === 3) {
+            seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+        } else if (parts.length === 2) {
+            seconds = parts[0] * 60 + parts[1];
+        } else if (parts.length === 1) {
+            seconds = parts[0];
+        } else {
+            return null;
+        }
+        return seconds;
+    }
+
+    /**
+     * Formats seconds into HH:MM:SS or MM:SS string.
+     * @param {number} seconds - The time in seconds.
+     * @returns {string} - The formatted time string.
+     */
+    function formatSeconds(seconds) {
+        const hrs = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        if (hrs > 0) {
+            return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        } else {
+            return `${mins}:${String(secs).padStart(2, '0')}`;
+        }
+    }
 
     /**
      * Adds the Loop button to YouTube's player controls.
@@ -31,15 +80,15 @@
         }
 
         // Prevent adding multiple buttons
-        if (document.getElementById('yt-loop-toggle')) {
+        if (document.getElementById('yt-advanced-loop-toggle')) {
             return;
         }
 
         // Create the button
         const button = document.createElement('button');
-        button.id = 'yt-loop-toggle';
+        button.id = 'yt-advanced-loop-toggle';
         button.className = 'ytp-button';
-        button.title = 'Loop Video OFF';
+        button.title = 'Loop OFF';
         button.style.opacity = '0.7'; // Initial state: OFF
         button.style.background = 'transparent';
         button.style.border = 'none';
@@ -51,41 +100,58 @@
         button.style.transition = 'opacity 0.3s, background-color 0.3s';
         button.innerText = 'Loop Off';
 
-        // Add click event listener to toggle looping
-        button.addEventListener('click', toggleLoop);
+        // Add click event listener to toggle looping or open segment UI
+        button.addEventListener('click', (event) => {
+            if (event.shiftKey) {
+                openLoopSegmentUI();
+            } else {
+                toggleLoop();
+            }
+        });
 
         // Append the button to the player controls
         playerControls.insertBefore(button, playerControls.firstChild);
     }
 
     /**
-     * Toggles the looping functionality on or off.
+     * Toggles the looping functionality based on the current loop state.
+     * - If OFF: Enables FULL loop.
+     * - If FULL or SEGMENT: Disables all loops.
      */
     function toggleLoop() {
-        loopEnabled = !loopEnabled;
-        const button = document.getElementById('yt-loop-toggle');
+        const button = document.getElementById('yt-advanced-loop-toggle');
 
-        if (loopEnabled) {
-            button.style.opacity = '1.0';
-            button.style.backgroundColor = '#FF0000'; // Red background when ON
-            button.style.borderRadius = '4px';
-            button.title = 'Loop Video ON';
-            button.innerText = 'Loop On';
-            startLoop();
-        } else {
+        if (currentLoopState === LOOP_STATE.FULL || currentLoopState === LOOP_STATE.SEGMENT) {
+            // Disable all looping
+            currentLoopState = LOOP_STATE.OFF;
             button.style.opacity = '0.7';
             button.style.backgroundColor = 'transparent';
             button.style.borderRadius = '0';
-            button.title = 'Loop Video OFF';
+            button.title = 'Loop OFF';
             button.innerText = 'Loop Off';
-            stopLoop();
+            stopFullLoop();
+            stopSegmentLoop();
+        } else {
+            // Enable full loop
+            currentLoopState = LOOP_STATE.FULL;
+            button.style.opacity = '1.0';
+            button.style.backgroundColor = '#FF0000'; // Red background when FULL loop ON
+            button.style.borderRadius = '4px';
+            button.title = 'Loop ON';
+            button.innerText = 'Loop On';
+            startFullLoop();
         }
     }
 
     /**
-     * Starts the loop checking interval.
+     * Starts the full video looping interval with dynamic check interval.
      */
-    function startLoop() {
+    function startFullLoop() {
+        // Clear any existing intervals to prevent duplicates
+        if (loopIntervalId) {
+            clearInterval(loopIntervalId);
+        }
+
         loopIntervalId = setInterval(() => {
             const video = document.querySelector('video');
 
@@ -94,63 +160,324 @@
                 return;
             }
 
-            // If the video is within the threshold to end, reset to start
-            if (video.duration - video.currentTime <= LOOP_THRESHOLD_SEC) {
-                video.currentTime = 0;
-                // Ensure the video continues playing
-                if (video.paused) {
-                    video.play().catch((error) => {
-                        console.error('Failed to resume playback:', error);
-                    });
+            const timeRemaining = video.duration - video.currentTime;
+
+            // Adjust check interval based on time remaining
+            if (timeRemaining <= FULL_LOOP_THRESHOLD_SEC && currentCheckInterval !== FAST_CHECK_INTERVAL_MS) {
+                clearInterval(loopIntervalId);
+                loopIntervalId = setInterval(checkFullLoop, FAST_CHECK_INTERVAL_MS);
+                currentCheckInterval = FAST_CHECK_INTERVAL_MS;
+            } else if (timeRemaining > FULL_LOOP_THRESHOLD_SEC && currentCheckInterval !== NORMAL_CHECK_INTERVAL_MS) {
+                clearInterval(loopIntervalId);
+                loopIntervalId = setInterval(checkFullLoop, NORMAL_CHECK_INTERVAL_MS);
+                currentCheckInterval = NORMAL_CHECK_INTERVAL_MS;
+            }
+
+            // Function to check and perform the loop
+            function checkFullLoop() {
+                const video = document.querySelector('video');
+                if (!video) return;
+
+                const currentTime = video.currentTime;
+                const duration = video.duration;
+
+                if (duration - currentTime <= FULL_LOOP_THRESHOLD_SEC) {
+                    video.currentTime = 0;
+                    // Ensure the video continues playing
+                    if (video.paused) {
+                        video.play().catch((error) => {
+                            console.error('Failed to resume playback:', error);
+                        });
+                    }
                 }
             }
-        }, CHECK_INTERVAL_MS);
 
-        // Attempt to keep the video playing in background
-        simulateActiveTab();
+            checkFullLoop(); // Initial check
+        }, currentCheckInterval);
     }
 
     /**
-     * Stops the loop checking interval.
+     * Stops the full video looping interval.
      */
-    function stopLoop() {
+    function stopFullLoop() {
         if (loopIntervalId) {
             clearInterval(loopIntervalId);
             loopIntervalId = null;
         }
-
-        // Restore the original tab state
-        restoreTabState();
+        currentCheckInterval = NORMAL_CHECK_INTERVAL_MS; // Reset to normal interval
     }
 
     /**
-     * Simulates an active tab to prevent the browser from throttling the script.
-     * Note: This approach may not work in all browsers and can have unintended side effects.
+     * Starts the loop segment with dynamic check interval.
      */
-    function simulateActiveTab() {
-        try {
-            Object.defineProperty(document, 'hidden', {
-                get: () => false,
-                configurable: true
-            });
-            Object.defineProperty(document, 'visibilityState', {
-                get: () => 'visible',
-                configurable: true
-            });
-        } catch (e) {
-            console.warn('Unable to override visibility properties:', e);
+    function startSegmentLoop() {
+        const video = document.querySelector('video');
+        if (!video) return;
+
+        // Define a function to handle the loop segment checks
+        function checkSegmentLoop() {
+            const currentTime = video.currentTime;
+
+            if (currentTime >= loopEndTime || currentTime < loopStartTime) {
+                video.currentTime = loopStartTime;
+                video.play().catch((error) => {
+                    console.error('Failed to resume playback:', error);
+                });
+            }
+        }
+
+        // Function to handle dynamic check interval for segment looping
+        function handleSegmentLoop() {
+            const timeRemaining = video.duration - video.currentTime;
+
+            // Adjust check interval based on time remaining
+            if (timeRemaining <= FULL_LOOP_THRESHOLD_SEC && currentCheckInterval !== FAST_CHECK_INTERVAL_MS) {
+                clearInterval(segmentLoopIntervalId);
+                segmentLoopIntervalId = setInterval(checkSegmentLoop, FAST_CHECK_INTERVAL_MS);
+                currentCheckInterval = FAST_CHECK_INTERVAL_MS;
+            } else if (timeRemaining > FULL_LOOP_THRESHOLD_SEC && currentCheckInterval !== NORMAL_CHECK_INTERVAL_MS) {
+                clearInterval(segmentLoopIntervalId);
+                segmentLoopIntervalId = setInterval(checkSegmentLoop, NORMAL_CHECK_INTERVAL_MS);
+                currentCheckInterval = NORMAL_CHECK_INTERVAL_MS;
+            }
+
+            checkSegmentLoop(); // Initial check
+        }
+
+        // Initialize the interval
+        segmentLoopIntervalId = setInterval(handleSegmentLoop, currentCheckInterval);
+    }
+
+    /**
+     * Stops the loop segment interval.
+     */
+    function stopSegmentLoop() {
+        if (segmentLoopIntervalId) {
+            clearInterval(segmentLoopIntervalId);
+            segmentLoopIntervalId = null;
+        }
+        currentCheckInterval = NORMAL_CHECK_INTERVAL_MS; // Reset to normal interval
+    }
+
+    /**
+     * Opens the Loop Segment UI panel.
+     */
+    function openLoopSegmentUI() {
+        // If a segment loop is already active, pre-fill the inputs
+        const existingSegment = currentLoopState === LOOP_STATE.SEGMENT;
+
+        // Check if the UI panel is already open
+        if (document.getElementById('yt-advanced-loop-segment-ui')) {
+            return; // Prevent multiple UI panels
+        }
+
+        // Create the UI panel
+        const uiPanel = document.createElement('div');
+        uiPanel.id = 'yt-advanced-loop-segment-ui';
+        uiPanel.style.position = 'fixed';
+        uiPanel.style.bottom = '80px';
+        uiPanel.style.right = '20px';
+        uiPanel.style.width = '250px';
+        uiPanel.style.padding = '10px';
+        uiPanel.style.backgroundColor = 'rgba(0, 0, 0, 0.85)';
+        uiPanel.style.color = 'white';
+        uiPanel.style.border = '1px solid #333';
+        uiPanel.style.borderRadius = '8px';
+        uiPanel.style.zIndex = '1000';
+        uiPanel.style.fontSize = '14px';
+        uiPanel.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
+        uiPanel.style.display = 'flex';
+        uiPanel.style.flexDirection = 'column';
+
+        // Title
+        const title = document.createElement('div');
+        title.innerText = 'Set Loop Segment';
+        title.style.fontWeight = 'bold';
+        title.style.marginBottom = '8px';
+        uiPanel.appendChild(title);
+
+        // Start Time Input
+        const startLabel = document.createElement('label');
+        startLabel.innerText = 'Start Time:';
+        startLabel.htmlFor = 'yt-advanced-loop-start-time';
+        startLabel.style.marginBottom = '4px';
+        uiPanel.appendChild(startLabel);
+
+        const startInput = document.createElement('input');
+        startInput.type = 'text';
+        startInput.id = 'yt-advanced-loop-start-time';
+        startInput.placeholder = 'e.g., 1:23 or 00:01:23';
+        startInput.style.width = '100%';
+        startInput.style.marginBottom = '8px';
+        startInput.value = existingSegment ? formatSeconds(loopStartTime) : '';
+        uiPanel.appendChild(startInput);
+
+        // End Time Input
+        const endLabel = document.createElement('label');
+        endLabel.innerText = 'End Time:';
+        endLabel.htmlFor = 'yt-advanced-loop-end-time';
+        endLabel.style.marginBottom = '4px';
+        uiPanel.appendChild(endLabel);
+
+        const endInput = document.createElement('input');
+        endInput.type = 'text';
+        endInput.id = 'yt-advanced-loop-end-time';
+        endInput.placeholder = 'e.g., 2:34 or 00:02:34';
+        endInput.style.width = '100%';
+        endInput.style.marginBottom = '8px';
+        endInput.value = existingSegment ? formatSeconds(loopEndTime) : '';
+        uiPanel.appendChild(endInput);
+
+        // Set Loop Button
+        const setButton = document.createElement('button');
+        setButton.innerText = 'Set Loop';
+        setButton.style.width = '100%';
+        setButton.style.padding = '6px';
+        setButton.style.marginBottom = '6px';
+        setButton.style.backgroundColor = '#4CAF50';
+        setButton.style.border = 'none';
+        setButton.style.borderRadius = '4px';
+        setButton.style.color = 'white';
+        setButton.style.cursor = 'pointer';
+        setButton.addEventListener('click', setLoopSegment);
+        uiPanel.appendChild(setButton);
+
+        // Clear Loop Button
+        const clearButton = document.createElement('button');
+        clearButton.innerText = 'Clear Loop';
+        clearButton.style.width = '100%';
+        clearButton.style.padding = '6px';
+        clearButton.style.backgroundColor = '#f44336';
+        clearButton.style.border = 'none';
+        clearButton.style.borderRadius = '4px';
+        clearButton.style.color = 'white';
+        clearButton.style.cursor = 'pointer';
+        clearButton.addEventListener('click', clearLoopSegment);
+        uiPanel.appendChild(clearButton);
+
+        // Close Button
+        const closeButton = document.createElement('span');
+        closeButton.innerHTML = '&times;';
+        closeButton.style.position = 'absolute';
+        closeButton.style.top = '5px';
+        closeButton.style.right = '10px';
+        closeButton.style.cursor = 'pointer';
+        closeButton.style.fontSize = '16px';
+        closeButton.addEventListener('click', () => {
+            uiPanel.remove();
+        });
+        uiPanel.appendChild(closeButton);
+
+        document.body.appendChild(uiPanel);
+    }
+
+    /**
+     * Sets the loop segment based on user input.
+     */
+    function setLoopSegment() {
+        const startInput = document.getElementById('yt-advanced-loop-start-time').value.trim();
+        const endInput = document.getElementById('yt-advanced-loop-end-time').value.trim();
+
+        const startSeconds = timeStrToSeconds(startInput);
+        const endSeconds = timeStrToSeconds(endInput);
+
+        if (startSeconds === null || endSeconds === null) {
+            alert('Invalid time format. Please use HH:MM:SS or MM:SS.');
+            return;
+        }
+
+        if (startSeconds >= endSeconds) {
+            alert('End time must be greater than start time.');
+            return;
+        }
+
+        const video = document.querySelector('video');
+        if (!video) {
+            alert('No video element found.');
+            return;
+        }
+
+        if (endSeconds > video.duration) {
+            alert('End time exceeds video duration.');
+            return;
+        }
+
+        loopStartTime = startSeconds;
+        loopEndTime = endSeconds;
+        currentLoopState = LOOP_STATE.SEGMENT;
+
+        updateLoopButton();
+
+        // Clear any existing loops
+        stopFullLoop();
+        stopSegmentLoop();
+
+        // Start segment loop with dynamic check interval
+        startSegmentLoop();
+
+        // Close the UI panel
+        const uiPanel = document.getElementById('yt-advanced-loop-segment-ui');
+        if (uiPanel) {
+            uiPanel.remove();
         }
     }
 
     /**
-     * Restores the original tab state by removing the overridden properties.
+     * Clears the loop segment and reverts to previous loop state.
      */
-    function restoreTabState() {
-        try {
-            delete document.hidden;
-            delete document.visibilityState;
-        } catch (e) {
-            console.warn('Unable to restore visibility properties:', e);
+    function clearLoopSegment() {
+        currentLoopState = LOOP_STATE.OFF;
+        loopStartTime = 0;
+        loopEndTime = 0;
+
+        updateLoopButton();
+
+        stopFullLoop();
+        stopSegmentLoop();
+
+        // Close the UI panel
+        const uiPanel = document.getElementById('yt-advanced-loop-segment-ui');
+        if (uiPanel) {
+            uiPanel.remove();
+        }
+    }
+
+    /**
+     * Stops the segment loop interval.
+     */
+    function stopSegmentLoop() {
+        if (segmentLoopIntervalId) {
+            clearInterval(segmentLoopIntervalId);
+            segmentLoopIntervalId = null;
+        }
+        currentCheckInterval = NORMAL_CHECK_INTERVAL_MS; // Reset to normal interval
+    }
+
+    /**
+     * Updates the Loop button's appearance based on the current loop state.
+     */
+    function updateLoopButton() {
+        const button = document.getElementById('yt-advanced-loop-toggle');
+        if (!button) return;
+
+        if (currentLoopState === LOOP_STATE.FULL) {
+            button.style.opacity = '1.0';
+            button.style.backgroundColor = '#FF0000'; // Red background when FULL loop ON
+            button.style.borderRadius = '4px';
+            button.title = 'Loop ON';
+            button.innerText = 'Loop On';
+        } else if (currentLoopState === LOOP_STATE.SEGMENT) {
+            button.style.opacity = '1.0';
+            button.style.backgroundColor = '#FFA500'; // Orange background when SEGMENT loop ON
+            button.style.borderRadius = '4px';
+            button.title = `Looping: ${formatSeconds(loopStartTime)} - ${formatSeconds(loopEndTime)}`;
+            button.innerText = `Loop: ${formatSeconds(loopStartTime)} - ${formatSeconds(loopEndTime)}`;
+        } else {
+            button.style.opacity = '0.7';
+            button.style.backgroundColor = 'transparent';
+            button.style.borderRadius = '0';
+            button.title = 'Loop OFF';
+            button.innerText = 'Loop Off';
         }
     }
 
@@ -177,4 +504,5 @@
 
     // Initialize the script
     init();
+
 })();
