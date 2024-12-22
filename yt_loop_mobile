@@ -1,0 +1,255 @@
+// ==UserScript==
+// @name         Mobile YouTube Loop Toggle Button
+// @namespace    http://tampermonkey.net/
+// @version      1.9
+// @description  Adds a small Loop button to YouTube videos on mobile YouTube. When enabled, it resets the video to the start when 1 second is left, creating an endless loop.
+// @author       Your Name
+// @match        *://m.youtube.com/watch*
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // Configuration
+    const CHECK_INTERVAL_MS = 500; // Check every 0.5 seconds
+    const LOOP_THRESHOLD_SEC = 1;  // Time before end to trigger loop
+    const DEBOUNCE_DELAY_MS = 300; // Debounce delay for MutationObserver
+
+    let loopEnabled = false;
+    let loopIntervalId = null;
+    let debounceTimeout = null;
+    let isFullscreen = false;
+
+    /**
+     * Creates and returns the Loop button element.
+     * @returns {HTMLButtonElement} The Loop button.
+     */
+    function createLoopButton() {
+        const button = document.createElement('button');
+        button.id = 'loop-button';
+        button.textContent = 'Loop Off';
+        Object.assign(button.style, {
+            position: 'absolute',
+            top: '10px',
+            left: '10px', // Changed from 'right' to 'left' for top-left positioning
+            padding: '5px 10px',
+            backgroundColor: '#ff0000', // Red indicates loop is off
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: '3px',
+            fontSize: '12px',
+            cursor: 'pointer',
+            zIndex: '1000', // High z-index to ensure visibility when not fullscreen
+            opacity: '0.8',
+            transition: 'background-color 0.3s, opacity 0.3s',
+        });
+
+        // Remove the 'right' property to prevent conflicting styles
+        // button.style.right = 'auto'; // Not strictly necessary since we're setting 'left'
+
+        // Add hover effects
+        button.addEventListener('mouseenter', () => {
+            button.style.opacity = '1';
+        });
+        button.addEventListener('mouseleave', () => {
+            button.style.opacity = '0.8';
+        });
+
+        // Add click event listener to toggle looping
+        button.addEventListener('click', toggleLoop);
+
+        return button;
+    }
+
+    /**
+     * Adds the Loop button to the video player if it doesn't already exist.
+     */
+    function addLoopButton() {
+        // Attempt to find the video container
+        const videoContainerSelectors = [
+            '#player', // Common YouTube player container
+            'ytd-app', // Alternative container on mobile
+            '.html5-video-player', // Another possible container
+            '.player-container', // Additional possible container
+            '.ytp-chrome-top', // Controls container
+        ];
+
+        let videoPlayer = null;
+
+        for (const selector of videoContainerSelectors) {
+            const element = document.querySelector(selector);
+            if (element) {
+                videoPlayer = element;
+                break;
+            }
+        }
+
+        if (!videoPlayer) {
+            console.warn('Video player container not found.');
+            return;
+        }
+
+        // Prevent adding multiple buttons
+        if (document.getElementById('loop-button')) {
+            return;
+        }
+
+        // Create the button and append it
+        const button = createLoopButton();
+        // Ensure the player container is relatively positioned
+        if (getComputedStyle(videoPlayer).position === 'static') {
+            videoPlayer.style.position = 'relative';
+        }
+        videoPlayer.appendChild(button);
+    }
+
+    /**
+     * Toggles the looping functionality on or off.
+     */
+    function toggleLoop() {
+        loopEnabled = !loopEnabled;
+        const button = document.getElementById('loop-button');
+
+        if (!button) {
+            console.error('Loop button not found.');
+            loopEnabled = false;
+            return;
+        }
+
+        if (loopEnabled) {
+            button.style.backgroundColor = '#00ff00'; // Green indicates loop is on
+            button.textContent = 'Loop On';
+            startLoop();
+        } else {
+            button.style.backgroundColor = '#ff0000'; // Red indicates loop is off
+            button.textContent = 'Loop Off';
+            stopLoop();
+        }
+    }
+
+    /**
+     * Starts the loop checking interval.
+     */
+    function startLoop() {
+        if (loopIntervalId) return; // Prevent multiple intervals
+
+        loopIntervalId = setInterval(() => {
+            const video = document.querySelector('video');
+
+            if (!video) {
+                console.warn('No video element found.');
+                return;
+            }
+
+            // If the video is within the threshold to end, reset to start
+            if (video.duration - video.currentTime <= LOOP_THRESHOLD_SEC) {
+                try {
+                    video.currentTime = 0;
+                    // Ensure the video continues playing
+                    if (video.paused) {
+                        video.play().catch((error) => {
+                            console.error('Failed to resume playback:', error);
+                        });
+                    }
+                } catch (error) {
+                    console.error('Error resetting video time:', error);
+                }
+            }
+        }, CHECK_INTERVAL_MS);
+    }
+
+    /**
+     * Stops the loop checking interval.
+     */
+    function stopLoop() {
+        if (loopIntervalId) {
+            clearInterval(loopIntervalId);
+            loopIntervalId = null;
+        }
+    }
+
+    /**
+     * Initializes the script by adding the Loop button.
+     */
+    function init() {
+        addLoopButton();
+    }
+
+    /**
+     * Debounced function to handle MutationObserver callbacks.
+     */
+    function handleMutations(mutations) {
+        for (let mutation of mutations) {
+            if (mutation.type === 'childList') {
+                if (debounceTimeout) {
+                    clearTimeout(debounceTimeout);
+                }
+                debounceTimeout = setTimeout(() => {
+                    addLoopButton();
+                }, DEBOUNCE_DELAY_MS);
+                break;
+            }
+        }
+    }
+
+    /**
+     * Sets up a MutationObserver to watch for changes in the DOM.
+     */
+    function setupMutationObserver() {
+        const observer = new MutationObserver(handleMutations);
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    /**
+     * Checks if the document is currently in fullscreen mode.
+     * @returns {boolean} True if in fullscreen, else false.
+     */
+    function checkFullscreen() {
+        return !!(document.fullscreenElement ||
+            document.webkitFullscreenElement ||
+            document.mozFullScreenElement ||
+            document.msFullscreenElement);
+    }
+
+    /**
+     * Updates the Loop button's visibility based on fullscreen state.
+     */
+    function updateButtonVisibility() {
+        const button = document.getElementById('loop-button');
+        if (!button) return;
+
+        const currentlyFullscreen = checkFullscreen();
+
+        if (currentlyFullscreen && !isFullscreen) {
+            // Entered fullscreen
+            isFullscreen = true;
+            button.style.display = 'none';
+        } else if (!currentlyFullscreen && isFullscreen) {
+            // Exited fullscreen
+            isFullscreen = false;
+            button.style.display = 'block';
+        }
+    }
+
+    /**
+     * Sets up periodic checks for fullscreen state.
+     */
+    function setupFullscreenChecker() {
+        setInterval(updateButtonVisibility, CHECK_INTERVAL_MS);
+    }
+
+    /**
+     * Initialize everything.
+     */
+    function initialize() {
+        init();
+        setupMutationObserver();
+        setupFullscreenChecker();
+    }
+
+    // Start the script
+    initialize();
+
+})();
