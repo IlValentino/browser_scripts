@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         YouTube Advanced Loop Toggle
+// @name         YouTube Advanced Loop Toggle with Dynamic Interval and Unified Toggle
 // @namespace    http://tampermonkey.net/
 // @version      2.2
 // @description  Adds a single Loop button to YouTube videos. Click to toggle full video loop, Shift+Click to set a loop segment with start and end times. Enhances loop precision by dynamically adjusting the check interval near the video end. Pressing the button once when a segment loop is active disables all looping.
@@ -15,7 +15,7 @@
     // Configuration
     const NORMAL_CHECK_INTERVAL_MS = 500; // Normal check every 0.5 seconds
     const FAST_CHECK_INTERVAL_MS = 100;   // Increased check every 0.1 seconds when near end
-    const FULL_LOOP_THRESHOLD_SEC = 3;     // Time before end to switch to fast checks
+    const FULL_LOOP_THRESHOLD_SEC = 2;     // Time before end to switch to fast checks
 
     // Loop States
     const LOOP_STATE = {
