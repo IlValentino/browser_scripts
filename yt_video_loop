@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Advanced Loop Toggle with Dynamic Interval and Unified Toggle
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.2-modified
 // @description  Adds a single Loop button to YouTube videos. Click to toggle full video loop, Shift+Click to set a loop segment with start and end times. Enhances loop precision by dynamically adjusting the check interval near the video end. Pressing the button once when a segment loop is active disables all looping.
 // @author       Your Name
 // @match        https://www.youtube.com/*
@@ -72,12 +72,11 @@
      * Adds the Loop button to YouTube's player controls.
      */
     function addLoopButton() {
-        const playerControls = document.querySelector('.ytp-right-controls');
-
-        if (!playerControls) {
-            console.warn('Player controls not found.');
-            return;
-        }
+        // Instead of inserting into .ytp-right-controls directly,
+        // we insert the button into the overall controls container (.ytp-chrome-controls)
+        // just before the native right controls.
+        const chromeControls = document.querySelector('.ytp-chrome-controls');
+        const rightControls = document.querySelector('.ytp-right-controls');
 
         // Prevent adding multiple buttons
         if (document.getElementById('yt-advanced-loop-toggle')) {
@@ -109,8 +108,16 @@
             }
         });
 
-        // Append the button to the player controls
-        playerControls.insertBefore(button, playerControls.firstChild);
+        // Append the button into the chrome controls before the native right controls.
+        if (chromeControls && rightControls) {
+            chromeControls.insertBefore(button, rightControls);
+        } else {
+            // Fallback: if structure not found, insert into right controls.
+            const playerControls = document.querySelector('.ytp-right-controls');
+            if (playerControls) {
+                playerControls.insertBefore(button, playerControls.firstChild);
+            }
+        }
     }
 
     /**
@@ -443,17 +450,6 @@
     }
 
     /**
-     * Stops the segment loop interval.
-     */
-    function stopSegmentLoop() {
-        if (segmentLoopIntervalId) {
-            clearInterval(segmentLoopIntervalId);
-            segmentLoopIntervalId = null;
-        }
-        currentCheckInterval = NORMAL_CHECK_INTERVAL_MS; // Reset to normal interval
-    }
-
-    /**
      * Updates the Loop button's appearance based on the current loop state.
      */
     function updateLoopButton() {
@@ -489,7 +485,8 @@
     }
 
     /**
-     * Observes changes in the DOM to re-add the Loop button if necessary (e.g., when navigating to a new video without a full page reload).
+     * Observes changes in the DOM to re-add the Loop button if necessary
+     * (e.g., when navigating to a new video without a full page reload).
      */
     const observer = new MutationObserver((mutations) => {
         for (let mutation of mutations) {
