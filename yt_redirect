@@ -1,0 +1,39 @@
+// ==UserScript==
+// @name         YouTube → Subscriptions Redirect (DOM Watcher)
+// @namespace    https://github.com/yourusername/userscripts
+// @version      1.2
+// @description  Immediately redirect YouTube homepage and Shorts URLs to Subscriptions whenever the URL changes (SPA-compatible).
+// @author       Your Name
+// @match        https://www.youtube.com/*
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const TARGET = 'https://www.youtube.com/feed/subscriptions';
+
+    function redirectIfNeeded() {
+        const p = window.location.pathname;
+        if (p === '/' || p.startsWith('/shorts/')) {
+            window.location.replace(TARGET);
+        }
+    }
+
+    // run on initial load
+    redirectIfNeeded();
+
+    // watch for YouTube's SPA URL changes via DOM mutations
+    let lastHref = location.href;
+    const observer = new MutationObserver(() => {
+        const href = location.href;
+        if (href !== lastHref) {
+            lastHref = href;
+            redirectIfNeeded();
+        }
+    });
+
+    // start observing changes to the document to catch in-page navigations
+    observer.observe(document, { subtree: true, childList: true });
+})();
