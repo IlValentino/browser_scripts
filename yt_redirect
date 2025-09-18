@@ -16,7 +16,7 @@
 
     function redirectIfNeeded() {
         const p = window.location.pathname;
-        if (p === '/' || p.startsWith('/shorts/')) {
+        if (p === '/' || p.endsWith('/shorts/')) {
             window.location.replace(TARGET);
         }
     }
