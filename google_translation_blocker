@@ -1,0 +1,50 @@
+// ==UserScript==
+// @name         Remove tl param + locale path segment
+// @namespace    https://tampermonkey.net/
+// @version      1.1
+// @description  Removes ?tl= parameters and locale segments like /de/ from URLs
+// @match        *://*.reddit.com/*
+// @match        *://www.wowhead.com/*
+// @grant        none
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  const url = new URL(window.location.href);
+  let changed = false;
+
+  // 1) Remove ?tl= query parameter
+  if (url.searchParams.has('tl')) {
+    url.searchParams.delete('tl');
+    changed = true;
+  }
+
+  // 2) Remove locale segment like /de/ (and a few common variants)
+  //    Adjust this list if you only want 'de'.
+  const locales = new Set([
+    'de', 'en', 'fr', 'es', 'it', 'pt', 'pt-br', 'ru', 'ko', 'zh-cn', 'zh-tw'
+  ]);
+
+  const segments = url.pathname.split('/'); // keeps leading '' for root
+  const filtered = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (locales.has(seg.toLowerCase())) {
+      changed = true;       // skip it
+      continue;
+    }
+    filtered.push(seg);
+  }
+
+  const newPath = filtered.join('/').replace(/\/{2,}/g, '/');
+  if (url.pathname !== newPath) {
+    url.pathname = newPath;
+    changed = true;
+  }
+
+  // Redirect only if something actually changed
+  if (changed) {
+    window.location.replace(url.toString());
+  }
+})();
