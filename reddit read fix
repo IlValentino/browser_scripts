@@ -1,0 +1,81 @@
+// ==UserScript==
+// @name         Reddit old unread auto-mark-read
+// @namespace    reddit.old.unread.autoread
+// @version      1.1
+// @description  Automatically mark all unread messages as read when visiting /message/unread/
+// @match        https://www.reddit.com/message/unread/*
+// @match        https://old.reddit.com/message/unread/*
+// @grant        none
+// @run-at       document-end
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  const STORAGE_KEY = 'reddit_unread_autoread_last_run';
+  const MIN_INTERVAL_MS = 5000;
+
+  function getModhash() {
+    if (typeof window.r !== 'undefined' && window.r?.config?.modhash) {
+      return window.r.config.modhash;
+    }
+
+    const uh = document.querySelector('input[name="uh"]');
+    if (uh?.value) return uh.value;
+
+    const html = document.documentElement.innerHTML;
+    const m =
+      html.match(/"modhash"\s*:\s*"([^"]+)"/) ||
+      html.match(/"uh"\s*:\s*"([^"]+)"/);
+
+    return m ? m[1] : null;
+  }
+
+  function recentlyRan() {
+    const last = Number(localStorage.getItem(STORAGE_KEY) || '0');
+    return Date.now() - last < MIN_INTERVAL_MS;
+  }
+
+  function softenUnreadUI() {
+    document.querySelectorAll('.message.unread, .thing.unread').forEach((el) => {
+      el.classList.remove('unread');
+      el.style.opacity = '0.75';
+    });
+  }
+
+  async function markAllRead() {
+    if (recentlyRan()) return;
+
+    const modhash = getModhash();
+    if (!modhash) {
+      console.warn('[reddit autoread] Could not find modhash.');
+      return;
+    }
+
+    try {
+      const resp = await fetch('/api/read_all_messages.json', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'X-Modhash': modhash
+        },
+        body: ''
+      });
+
+      if (resp.ok || resp.status === 202) {
+        localStorage.setItem(STORAGE_KEY, String(Date.now()));
+        softenUnreadUI();
+        console.log('[reddit autoread] Marked all messages as read.');
+      } else {
+        console.warn('[reddit autoread] Failed with status:', resp.status);
+      }
+    } catch (err) {
+      console.error('[reddit autoread] Request failed:', err);
+    }
+  }
+
+  window.addEventListener('load', () => {
+    setTimeout(markAllRead, 400);
+  });
+})();
