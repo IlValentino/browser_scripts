@@ -1,81 +1,90 @@
-// ==UserScript==
-// @name         Reddit old unread auto-mark-read
-// @namespace    reddit.old.unread.autoread
-// @version      1.1
-// @description  Automatically mark all unread messages as read when visiting /message/unread/
-// @match        https://www.reddit.com/message/unread/*
-// @match        https://old.reddit.com/message/unread/*
-// @grant        none
-// @run-at       document-end
-// ==/UserScript==
+import sys
+from typing import Any, cast
 
-(function () {
-  'use strict';
+import mutagen
+from yt_dlp import YoutubeDL
 
-  const STORAGE_KEY = 'reddit_unread_autoread_last_run';
-  const MIN_INTERVAL_MS = 5000;
+URL = "https://www.youtube.com/watch?v=vYX1ZLFxs8A"
+AUDIO_ONLY = True
 
-  function getModhash() {
-    if (typeof window.r !== 'undefined' && window.r?.config?.modhash) {
-      return window.r.config.modhash;
+
+def progress_hook(data: dict[str, Any]) -> None:
+    if data['status'] == 'downloading':
+        total = (
+            data.get('total_bytes')
+            or data.get('total_bytes_estimate')
+        )
+        downloaded = data.get('downloaded_bytes', 0)
+
+        if total:
+            percentage = downloaded / total * 100
+            sys.stdout.write(f'\rDownloading: {percentage:5.1f}%')
+            sys.stdout.flush()
+
+    elif data['status'] == 'finished':
+        print('\nDownload finished, processing output...')
+
+
+def download_video(
+    url: str,
+    output_template: str,
+    audio_only: bool,
+) -> None:
+    ydl_opts: dict[str, Any] = {
+        'outtmpl': output_template,
+        'noplaylist': True,
+        'progress_hooks': [progress_hook],
+        'sleep_interval': 5,
+        'max_sleep_interval': 10,
     }
 
-    const uh = document.querySelector('input[name="uh"]');
-    if (uh?.value) return uh.value;
+    if audio_only:
+        ydl_opts.update({
+            'format': 'm4a/bestaudio/best',
+            'writethumbnail': True,
+            'postprocessors': [
+                {
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'm4a',
+                },
+                {
+                    'key': 'FFmpegMetadata',
+                    'add_metadata': True,
+                },
+                {
+                    'key': 'EmbedThumbnail',
+                },
+            ],
+        })
+    else:
+        ydl_opts.update({
+            'format': 'bestvideo+bestaudio/best',
+            'merge_output_format': 'mp4',
+        })
 
-    const html = document.documentElement.innerHTML;
-    const m =
-      html.match(/"modhash"\s*:\s*"([^"]+)"/) ||
-      html.match(/"uh"\s*:\s*"([^"]+)"/);
+    try:
+        with YoutubeDL(cast(Any, ydl_opts)) as ydl:
+            ydl.download([url])
+    except Exception as error:
+        print(f'Error: {error}', file=sys.stderr)
+        raise SystemExit(1) from error
 
-    return m ? m[1] : null;
-  }
 
-  function recentlyRan() {
-    const last = Number(localStorage.getItem(STORAGE_KEY) || '0');
-    return Date.now() - last < MIN_INTERVAL_MS;
-  }
+def main() -> None:
+    if 'list=' in URL:
+        output_template = (
+            '~/Music/yt-dlp/'
+            '%(playlist_index)02d %(title)s.%(ext)s'
+        )
+    else:
+        output_template = '~/Music/yt-dlp/%(title)s.%(ext)s'
 
-  function softenUnreadUI() {
-    document.querySelectorAll('.message.unread, .thing.unread').forEach((el) => {
-      el.classList.remove('unread');
-      el.style.opacity = '0.75';
-    });
-  }
+    download_video(
+        URL,
+        output_template=output_template,
+        audio_only=AUDIO_ONLY,
+    )
 
-  async function markAllRead() {
-    if (recentlyRan()) return;
 
-    const modhash = getModhash();
-    if (!modhash) {
-      console.warn('[reddit autoread] Could not find modhash.');
-      return;
-    }
-
-    try {
-      const resp = await fetch('/api/read_all_messages.json', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          'X-Modhash': modhash
-        },
-        body: ''
-      });
-
-      if (resp.ok || resp.status === 202) {
-        localStorage.setItem(STORAGE_KEY, String(Date.now()));
-        softenUnreadUI();
-        console.log('[reddit autoread] Marked all messages as read.');
-      } else {
-        console.warn('[reddit autoread] Failed with status:', resp.status);
-      }
-    } catch (err) {
-      console.error('[reddit autoread] Request failed:', err);
-    }
-  }
-
-  window.addEventListener('load', () => {
-    setTimeout(markAllRead, 400);
-  });
-})();
+if __name__ == '__main__':
+    main()
